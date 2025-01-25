@@ -1,0 +1,4 @@
+DB_HOST=localhost
+DB_USER=tu_user
+DB_PASSWORD=tu_password
+DB_NAME=tu_base_de_datos
