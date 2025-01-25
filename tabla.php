@@ -9,8 +9,9 @@ $conn = $db->connect();
 // Parámetros básicos
 $tabla = $_GET['tabla'] ?? '';
 $pagina = $_GET['page'] ?? 1;
-$limite = 10000;
+$limite = 1000;
 $offset = ($pagina - 1) * $limite;
+$orden = $_GET['order'] ?? ''; // Nuevo: parámetro de orden
 
 // Validar tabla
 if (empty($tabla)) {
@@ -20,7 +21,7 @@ if (empty($tabla)) {
 }
 
 try {
-    // Paso 1: Verificar si la tabla existe
+    // Verificar si la tabla existe
     $result = $conn->query("SHOW TABLES LIKE '$tabla'");
     if ($result->num_rows === 0) {
         http_response_code(404);
@@ -28,27 +29,82 @@ try {
         exit;
     }
 
-    // Paso 2: Obtener columnas de la tabla (para validar los filtros)
+    // Obtener columnas de la tabla
     $columnas = $conn->query("SHOW COLUMNS FROM $tabla")->fetch_all(MYSQLI_ASSOC);
     $nombresColumnas = array_column($columnas, 'Field');
 
-    // Paso 3: Recoger filtros de la URL (ej: &nombre=Juan&edad=30)
+    // =============================================
+    // ** Parte 1: Procesar filtros avanzados **
+    // =============================================
     $filtros = [];
-    foreach ($_GET as $key => $value) {
-        if ($key !== 'tabla' && $key !== 'page' && in_array($key, $nombresColumnas)) {
-            $filtros[$key] = $conn->real_escape_string($value); // Limpiar el valor
+    foreach ($_GET as $campo => $valor) {
+        // Ignorar parámetros reservados
+        if (in_array($campo, ['tabla', 'page', 'order'])) continue;
+
+        // Validar que el campo exista en la tabla
+        if (!in_array($campo, $nombresColumnas)) {
+            http_response_code(400);
+            echo json_encode(["error" => "El campo '$campo' no existe en la tabla '$tabla'"]);
+            exit;
         }
+
+        // Detectar operadores y valores (ej: "precio=>100" -> operador ">", valor "100")
+        $operadoresPermitidos = ['>', '<', '>=', '<=', '!=', '=', 'LIKE'];
+        $operador = '='; // Por defecto
+
+        // Buscar si el valor inicia con un operador
+        foreach ($operadoresPermitidos as $op) {
+            if (str_starts_with($valor, $op)) {
+                $operador = $op;
+                $valor = substr($valor, strlen($op));
+                break;
+            }
+        }
+
+        // Manejar búsquedas parciales con *
+        if ($operador === 'LIKE' || strpos($valor, '*') !== false) {
+            $operador = 'LIKE';
+            $valor = str_replace('*', '%', $valor); // Convertir * a %
+            $valor = "%$valor%"; // Búsqueda parcial por defecto
+        }
+
+        // Escapar el valor para seguridad
+        $valor = $conn->real_escape_string($valor);
+
+        // Construir condición SQL
+        $filtros[] = "$campo $operador '$valor'";
     }
 
-    // Paso 4: Construir la consulta SQL con filtros
-    $where = [];
-    foreach ($filtros as $campo => $valor) {
-        $where[] = "$campo = '$valor'"; // Búsqueda exacta
-    }
-    $whereClause = empty($where) ? "" : "WHERE " . implode(" AND ", $where);
+    $whereClause = empty($filtros) ? "" : "WHERE " . implode(" AND ", $filtros);
 
-    // Paso 5: Obtener datos paginados con filtros
-    $query = "SELECT * FROM $tabla $whereClause LIMIT $limite OFFSET $offset";
+    // =============================================
+    // ** Parte 2: Procesar ordenamiento **
+    // =============================================
+    $orderClause = '';
+    if (!empty($orden)) {
+        $direccion = 'ASC'; // Por defecto
+        $campoOrden = $orden;
+
+        // Si el campo empieza con "-", es orden descendente
+        if (str_starts_with($orden, '-')) {
+            $direccion = 'DESC';
+            $campoOrden = substr($orden, 1);
+        }
+
+        // Validar que el campo de orden exista
+        if (!in_array($campoOrden, $nombresColumnas)) {
+            http_response_code(400);
+            echo json_encode(["error" => "El campo '$campoOrden' no existe en la tabla"]);
+            exit;
+        }
+
+        $orderClause = "ORDER BY $campoOrden $direccion";
+    }
+
+    // =============================================
+    // ** Consulta final **
+    // =============================================
+    $query = "SELECT * FROM $tabla $whereClause $orderClause LIMIT $limite OFFSET $offset";
     $result = $conn->query($query);
 
     $datos = [];
@@ -56,7 +112,7 @@ try {
         $datos[] = $fila;
     }
 
-    // Paso 6: Calcular total de registros (con filtros)
+    // Total de registros (con filtros)
     $queryTotal = "SELECT COUNT(*) as total FROM $tabla $whereClause";
     $totalRegistros = $conn->query($queryTotal)->fetch_assoc()['total'];
     $totalPaginas = ceil($totalRegistros / $limite);
@@ -66,7 +122,8 @@ try {
         "pagina_actual" => $pagina,
         "total_paginas" => $totalPaginas,
         "total_registros" => $totalRegistros,
-        "filtros_aplicados" => $filtros,
+        "filtros" => $filtros,
+        "orden" => $orden,
         "datos" => $datos
     ]);
 
@@ -76,3 +133,4 @@ try {
 }
 
 $conn->close();
+?>
