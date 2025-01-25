@@ -1,4 +1,18 @@
 <?php
+
+if (!isset($_SERVER['HTTP_AUTHORIZATION'])) {
+  http_response_code(401);
+  echo json_encode(["error" => "Token no proporcionado"]);
+  exit;
+}
+
+$token = str_replace('Bearer ', '', $_SERVER['HTTP_AUTHORIZATION']);
+if (!Auth::validarToken($token)) {
+  http_response_code(401);
+  echo json_encode(["error" => "Token inválido o expirado"]);
+  exit;
+}
+
 require_once '../paths.php';
 require_once DATABASE_PATH;
 
@@ -21,16 +35,17 @@ try {
     // =================================================================
     // Paso 1: Validar nombres de tablas y columnas (¡Seguridad crítica!)
     // =================================================================
-    $validarTabla = function($nombreTabla) use ($conn) {
-        $result = $conn->query("SHOW TABLES LIKE '$nombreTabla'");
-        if ($result->num_rows === 0) {
+
+    $schema = SchemaCache::getSchema();
+
+    $validarTabla = function($nombreTabla) use ($schema) {
+        if (!isset($schema[$nombreTabla])) {
             throw new Exception("La tabla '$nombreTabla' no existe");
         }
     };
 
-    $validarColumna = function($tabla, $columna) use ($conn) {
-        $result = $conn->query("SHOW COLUMNS FROM $tabla LIKE '$columna'");
-        if ($result->num_rows === 0) {
+    $validarColumna = function($tabla, $columna) use ($schema) {
+        if (!in_array($columna, $schema[$tabla])) {
             throw new Exception("La columna '$columna' no existe en $tabla");
         }
     };
