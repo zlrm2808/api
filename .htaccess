@@ -1,9 +1,17 @@
 RewriteEngine On
 
+# Redirigir solicitudes a la carpeta METHOD
+RewriteRule ^GET$ METHOD/GET.php [L]
+RewriteRule ^POST$ METHOD/POST.php [L]
+RewriteRule ^PUT$ METHOD/PUT.php [L]
+RewriteRule ^DELETE$ METHOD/DELETE.php [L]
+
+# Eliminar la extensión .php de las URLs
 RewriteCond %{REQUEST_FILENAME} !-d
 RewriteCond %{REQUEST_FILENAME}\.php -f
 RewriteRule ^(.*)$ $1.php [L]
 
+# Permitir métodos personalizados (PUT, DELETE)
 <Limit GET POST PUT DELETE>
     Allow from all
 </Limit>

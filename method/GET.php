@@ -1,5 +1,6 @@
 <?php
-require_once __DIR__ . '/config/Database.php';
+require_once '../paths.php';
+require_once DATABASE_PATH;
 
 header("Content-Type: application/json");
 
