@@ -11,7 +11,7 @@ $tabla = $_GET['tabla'] ?? '';
 $pagina = $_GET['page'] ?? 1;
 $limite = 1000;
 $offset = ($pagina - 1) * $limite;
-$orden = $_GET['order'] ?? ''; // Nuevo: parámetro de orden
+$orden = $_GET['order'] ?? '';
 
 // Validar tabla
 if (empty($tabla)) {
@@ -29,30 +29,75 @@ try {
         exit;
     }
 
-    // Obtener columnas de la tabla
+    // Obtener columnas y sus tipos (ej: INT, VARCHAR, DATE)
     $columnas = $conn->query("SHOW COLUMNS FROM $tabla")->fetch_all(MYSQLI_ASSOC);
     $nombresColumnas = array_column($columnas, 'Field');
+    $tiposColumnas = [];
+    foreach ($columnas as $col) {
+        $tiposColumnas[$col['Field']] = $col['Type'];
+    }
 
     // =============================================
-    // ** Parte 1: Procesar filtros avanzados **
+    // ** Parte 1: Procesar filtros (case-insensitive y AND/OR) **
     // =============================================
     $filtros = [];
-    foreach ($_GET as $campo => $valor) {
-        // Ignorar parámetros reservados
-        if (in_array($campo, ['tabla', 'page', 'order'])) continue;
+    $params = $_GET;
 
-        // Validar que el campo exista en la tabla
-        if (!in_array($campo, $nombresColumnas)) {
+    foreach ($params as $paramKey => $valor) {
+        // Ignorar parámetros reservados
+        if (in_array($paramKey, ['tabla', 'page', 'order'])) continue;
+
+        // Convertir parámetro a minúsculas y buscar coincidencia con columnas reales
+        $campoReal = null;
+        foreach ($nombresColumnas as $col) {
+            if (strtolower($paramKey) === strtolower($col)) {
+                $campoReal = $col;
+                break;
+            }
+        }
+
+        if (!$campoReal) {
             http_response_code(400);
-            echo json_encode(["error" => "El campo '$campo' no existe en la tabla '$tabla'"]);
+            echo json_encode(["error" => "El campo '$paramKey' no existe en la tabla '$tabla'"]);
             exit;
         }
 
-        // Detectar operadores y valores (ej: "precio=>100" -> operador ">", valor "100")
-        $operadoresPermitidos = ['>', '<', '>=', '<=', '!=', '=', 'LIKE'];
-        $operador = '='; // Por defecto
+        // Determinar operador (AND u OR)
+        $operadorLogico = 'AND';
+        if (strpos($paramKey, '__or') !== false) {
+            $operadorLogico = 'OR';
+        }
 
-        // Buscar si el valor inicia con un operador
+        // =============================================
+        // ** Parte 2: Manejar rangos (ej: 100~500) **
+        // =============================================
+        if (strpos($valor, '::') !== false) {
+            list($valor1, $valor2) = explode('::', $valor, 2);
+            $valor1 = $conn->real_escape_string(trim($valor1));
+            $valor2 = $conn->real_escape_string(trim($valor2));
+        
+            // Validar tipo de dato para rangos
+            $tipo = $tiposColumnas[$campoReal];
+            if (strpos($tipo, 'int') !== false || strpos($tipo, 'float') !== false) {
+                $clausula = "$campoReal BETWEEN $valor1 AND $valor2";
+            } else {
+                $clausula = "$campoReal BETWEEN '$valor1' AND '$valor2'";
+            }
+        
+            // Agregar como array con operador lógico
+            $filtros[] = [
+                'clausula' => $clausula,
+                'operador' => $operadorLogico
+            ];
+            continue;
+        }
+
+        // =============================================
+        // ** Parte 3: Manejar operadores y tipos de datos **
+        // =============================================
+        $operadoresPermitidos = ['>', '<', '>=', '<=', '!=', '=', 'LIKE'];
+        $operador = '=';
+
         foreach ($operadoresPermitidos as $op) {
             if (str_starts_with($valor, $op)) {
                 $operador = $op;
@@ -61,38 +106,81 @@ try {
             }
         }
 
-        // Manejar búsquedas parciales con *
+        // Búsquedas parciales con *
         if ($operador === 'LIKE' || strpos($valor, '*') !== false) {
             $operador = 'LIKE';
-            $valor = str_replace('*', '%', $valor); // Convertir * a %
-            $valor = "%$valor%"; // Búsqueda parcial por defecto
+            $valor = str_replace('*', '%', $valor);
         }
 
-        // Escapar el valor para seguridad
+        // Validar y castear tipo de dato
+        $tipo = $tiposColumnas[$campoReal];
         $valor = $conn->real_escape_string($valor);
 
-        // Construir condición SQL
-        $filtros[] = "$campo $operador '$valor'";
+        if (strpos($tipo, 'int') !== false) {
+            $valor = (int)$valor;
+        } elseif (strpos($tipo, 'float') !== false || strpos($tipo, 'double') !== false) {
+            $valor = (float)$valor;
+        } else {
+            $valor = "'$valor'"; // Entre comillas si es texto/date
+        }
+
+        $filtros[] = [
+            'clausula' => "$campoReal $operador $valor",
+            'operador' => $operadorLogico
+        ];
     }
 
-    $whereClause = empty($filtros) ? "" : "WHERE " . implode(" AND ", $filtros);
+    // =============================================
+    // ** Construir cláusula WHERE agrupando AND/OR **
+    // =============================================
+    $whereClause = '';
+    $grupos = [];
+    $currentGroup = [];
+
+    foreach ($filtros as $filtro) {
+        if ($filtro['operador'] === 'OR') {
+            $currentGroup[] = $filtro['clausula'];
+        } else {
+            if (!empty($currentGroup)) {
+                $grupos[] = '(' . implode(' OR ', $currentGroup) . ')';
+                $currentGroup = [];
+            }
+            $grupos[] = $filtro['clausula'];
+        }
+    }
+
+    if (!empty($currentGroup)) {
+        $grupos[] = '(' . implode(' OR ', $currentGroup) . ')';
+    }
+
+    if (!empty($grupos)) {
+        $whereClause = 'WHERE ' . implode(' AND ', $grupos);
+    }
 
     // =============================================
-    // ** Parte 2: Procesar ordenamiento **
+    // ** Parte 4: Ordenamiento **
     // =============================================
     $orderClause = '';
     if (!empty($orden)) {
-        $direccion = 'ASC'; // Por defecto
+        $direccion = 'ASC';
         $campoOrden = $orden;
 
-        // Si el campo empieza con "-", es orden descendente
         if (str_starts_with($orden, '-')) {
             $direccion = 'DESC';
             $campoOrden = substr($orden, 1);
         }
 
-        // Validar que el campo de orden exista
-        if (!in_array($campoOrden, $nombresColumnas)) {
+        // Validar campo de orden (case-insensitive)
+        $campoValido = false;
+        foreach ($nombresColumnas as $col) {
+            if (strtolower($campoOrden) === strtolower($col)) {
+                $campoOrden = $col;
+                $campoValido = true;
+                break;
+            }
+        }
+
+        if (!$campoValido) {
             http_response_code(400);
             echo json_encode(["error" => "El campo '$campoOrden' no existe en la tabla"]);
             exit;
@@ -112,7 +200,6 @@ try {
         $datos[] = $fila;
     }
 
-    // Total de registros (con filtros)
     $queryTotal = "SELECT COUNT(*) as total FROM $tabla $whereClause";
     $totalRegistros = $conn->query($queryTotal)->fetch_assoc()['total'];
     $totalPaginas = ceil($totalRegistros / $limite);
@@ -122,8 +209,8 @@ try {
         "pagina_actual" => $pagina,
         "total_paginas" => $totalPaginas,
         "total_registros" => $totalRegistros,
-        "filtros" => $filtros,
-        "orden" => $orden,
+        "filtros" => $whereClause,
+        "orden" => $orderClause,
         "datos" => $datos
     ]);
 
@@ -133,4 +220,3 @@ try {
 }
 
 $conn->close();
-?>
