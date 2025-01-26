@@ -1,5 +1,6 @@
 <?php
-require_once __DIR__ . '/../vendor/autoload.php';
+require_once "../paths.php";
+require_once AUTOLOAD_PATH;
 
 $dotenv = Dotenv\Dotenv::createImmutable(__DIR__ . '/..');
 $dotenv->load();
@@ -9,12 +10,21 @@ class Database {
     private $user;
     private $password;
     private $database;
+    public $encriptKey;
 
-    public function __construct() {
-        $this->host = $_ENV['DB_HOST'];
-        $this->user = $_ENV['DB_USER'];
-        $this->password = $_ENV['DB_PASSWORD'];
-        $this->database = $_ENV['DB_NAME'];
+    public function __construct($config = 'MAIN') {
+        
+        $prefix = ($config === 'MAIN') ? 'DB_MAIN_' : 'DB_EMP_';
+        
+        $this->host = $_ENV[$prefix . 'HOST'] ?? 'localhost';
+        $this->user = $_ENV[$prefix . 'USER'] ?? 'root';
+        $this->password = $_ENV[$prefix . 'PASSWORD'] ?? '';
+        $this->database = $_ENV[$prefix . 'NAME'] ?? '';
+
+        $this->encriptKey = $_ENV['ENCRYPTION_KEY'] ?? '';
+        if (empty($this->encriptKey)) {
+            throw new Exception("La clave de encriptación no está configurada en .env");
+        }
     }
 
     public function connect() {

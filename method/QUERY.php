@@ -15,6 +15,8 @@ if (!Auth::validarToken($token)) {
 
 require_once '../paths.php';
 require_once DATABASE_PATH;
+require_once AUTH_PATH;
+require_once EMPRESA_PATH;
 
 header("Content-Type: application/json");
 

@@ -1,7 +1,7 @@
 <?php
 
 require_once "../paths.php";
-require_once AUTOLOAD;
+require_once AUTOLOAD_PATH;
 
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
